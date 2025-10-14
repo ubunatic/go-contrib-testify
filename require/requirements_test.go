@@ -795,7 +795,7 @@ func TestEventuallyWithTTrue(t *testing.T) {
 
 func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 	t.Setenv("TestFailInsideEventually", "1")
-	cmd := exec.Command("go", "test", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
+	cmd := exec.Command("go", "test", "-v", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
 	out, err := cmd.CombinedOutput()
 	Error(t, err)
 	for _, line := range strings.Split(string(out), "\n") {
@@ -844,12 +844,14 @@ func TestFailInsideEventually(t *testing.T) {
 
 	RequireFail := func(t *testing.T) { t.Helper(); Fail(t, "fail now") }
 	AssertFail := func(t *testing.T) { t.Helper(); assert.Fail(t, "mark as failed") }
+	Panic := func(t *testing.T) { t.Helper(); panic("panicking now") }
 
 	for _, tt := range []test{
 		{"require.Fail must stop", stopAfterFail, RequireFail, mustStop},
 		{"require.Fail must stop even if told not to", noStopAfterFail, RequireFail, mustStop},
 		{"assert.Fail must stop if told to", stopAfterFail, AssertFail, mustStop},
 		{"assert.Fail must not stop if told not to", noStopAfterFail, AssertFail, mustNotStop},
+		{"panic must stop", stopAfterFail, Panic, mustStop},
 	} {
 		count := 0
 		start := time.Now()
