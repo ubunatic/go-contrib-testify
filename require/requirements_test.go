@@ -3,6 +3,11 @@ package require
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +31,7 @@ type AssertionTesterNonConformingObject struct {
 }
 
 type MockT struct {
+	// Failed marks the test as failed.
 	Failed bool
 }
 
@@ -787,4 +793,145 @@ func TestEventuallyWithTTrue(t *testing.T) {
 	EventuallyWithT(mockT, condition, 100*time.Millisecond, 20*time.Millisecond)
 	False(t, mockT.Failed, "Check should pass")
 	Equal(t, 2, counter, "Condition is expected to be called 2 times")
+}
+
+func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
+	t.Setenv("TestFailInsideEventually", "1")
+	cmd := exec.Command("go", "test", "-v", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
+	out, err := cmd.CombinedOutput()
+	assert.Error(t, err, "go test for TestFailInsideEventually must fail")
+	finishedTests := 0
+	observedErrors := 0
+	observedConditionFailures := 0
+	extractTestNameExp := regexp.MustCompile(`TestFailInsideEventuallyViaCommandLine[^ ]*`)
+	name := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "=== RUN   ") {
+			name = extractTestNameExp.FindString(line)
+			fmt.Println(line)
+		}
+
+		if strings.Contains(line, "❌") {
+			fmt.Println(name, line, "<-- unexpected error")
+			observedErrors++
+		}
+		if strings.Contains(line, "✅ FINISHED") {
+			fmt.Println(name, line, "<-- expected successful test")
+			finishedTests++
+		}
+		if strings.Contains(line, "Error:") && strings.Contains(line, "Condition") {
+			fmt.Println(name, line, "<-- expected 'Condition' message")
+			observedConditionFailures++
+		}
+	}
+
+	assert.Equal(t, 0, observedErrors, "Unexpected errors detected, see output")
+
+	// There are 4 tests that are expected to fail.
+	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
+	assert.Equal(t, 4, finishedTests, "Expected number of FINISHED tests not found")
+
+	// There are 3 tests where the condition is never satisfied.
+	// One test uses assert.Fail but eventually returns true and thus satisfies the condition.
+	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
+	assert.Equal(t, 3, observedConditionFailures, "Expected number of 'Condition' messages not found, see output")
+}
+
+func TestFailInsideEventually(t *testing.T) {
+	if os.Getenv("TestFailInsideEventually") == "" {
+		t.Skip("Skipping test, run via TestFailInsideEventuallyViaCommandLine")
+	}
+
+	// Using testing.T:
+	// Enable this test temporarily to manually check that the issue is fixed.
+	// Note that MockT does not reproduce the issue, so we have to use the real *testing.T.
+	// TODO: Enhance MockT to reproduce the issue, then we can remove the t.Skip above.
+	// UPDATE: I tried to enhance MockT, but it still does not reproduce the issue or fails
+	//         in a different way. Therefore I keep using *testing.T for now.
+	//         In general, require.MockT does not play well when assert.Fail is called.
+	//         The test will not be marked as failed, even though Fail is called.
+
+	// The Bug:
+	// Calling require.Fail (or similar) inside require.Eventually will prevent the 'condition'
+	// to exit with a result. The channel assignment in the assert.Eventually will block
+	// and hang the test until the timeout is reached. There was no other way to wait
+	// for the unclean exit. The changes to assert.Eventually committed with this test
+	// fix this issue, by also waiting for an unclean exit of the condition.
+
+	// How to read the test results:
+	// - See [TestFailInsideEventuallyViaCommandLine], which automates this
+	// - The test will always fail, because it calls Fail or assert.Fail or panics
+	// - The test is "successful" if it fails quickly and cleanly, i.e. without
+	//   multiple calls to the eventually function, except if expected.
+	// - The test logs should contain specific messages, see below.
+	// - The test must not log any UNCLEAN EXIT or MISSED ASSERTIONS messages or any errors ❌.
+
+	type test struct {
+		Name     string
+		Return   bool
+		FailFunc func(t TestingT)
+		MustStop bool // after the FailFunc is called
+	}
+
+	const returnStop = true
+	const returnNoStop = false
+	const mustStop = true
+	const mustNotStop = false
+
+	RequireFail := func(t TestingT) { Fail(t, "💥 fail now") }
+	AssertFail := func(t TestingT) { assert.Fail(t, "💥 mark as failed") }
+
+	for _, tt := range []test{
+		// Test cases that must exit immediately after the first call to the condition.
+		{"require.Fail must stop", returnStop, RequireFail, mustStop},
+		{"require.Fail must stop even if told not to", returnNoStop, RequireFail, mustStop},
+		{"assert.Fail must stop if told to", returnStop, AssertFail, mustStop},
+
+		// The following test case is the only one that must not stop and where multiple calls
+		// to the condition are expected, because assert.Fail does not stop the execution of the condition.
+		{"assert.Fail must not stop if told not to", returnNoStop, AssertFail, mustNotStop},
+
+		// Make sure to update the assertions in TestFailInsideEventuallyViaCommandLine
+		// accordingly if you change the number of tests here.
+	} {
+		count := 0
+		start := time.Now()
+		timeout := time.Second * 1
+		tick := time.Second / 3
+		ok := false
+
+		ok = t.Run(tt.Name, func(t *testing.T) {
+			// Cannot use a MockT here, because it does reproduce the issue.
+			Eventually(t, func() bool {
+				count++
+				t.Log("🪲 eventually call number:", count, "calling FailNow!")
+				tt.FailFunc(t)   // any case that calls Fail or assert.Fail should stop retrying
+				return tt.Return // indicate whether to stop retrying
+			}, timeout, tick)
+		})
+
+		dur := time.Since(start)
+		t.Log("🪲 test duration:", dur)
+
+		// TODO: Replace with plain t with MockT once it can reproduce the issue.
+		// Until can only indicate that the test should have failed using stdout.
+
+		c := new(assert.CollectT)
+		assert.True(c, !ok, "❌ UNCLEAN EXIT: test was expected to fail, but passed")
+
+		if tt.MustStop {
+			assert.Equal(c, 1, count, "❌ UNCLEAN EXIT: eventually func should be called exactly once")
+			assert.Less(c, dur, tick, "❌ UNCLEAN EXIT: eventually func should be called only once, but took too long")
+		} else {
+			assert.Greater(c, count, 1, "❌ MISSED ASSERTIONS: eventually func should be called multiple times, but was called only once")
+			assert.Greater(c, dur, tick, "❌ MISSED ASSERTIONS: eventually func should be called multiple times over time, but total duration was too short")
+		}
+
+		if c.Failed() {
+			t.Log("❌ TEST FAILED")
+		} else {
+			t.Log("✅ FINISHED", tt.Name)
+		}
+	}
 }

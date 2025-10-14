@@ -2099,12 +2099,12 @@ func (*CollectT) Copy(TestingT) {
 }
 
 func (c *CollectT) fail() {
-	if !c.failed() {
+	if !c.Failed() {
 		c.errors = []error{} // Make it non-nil to mark a failure.
 	}
 }
 
-func (c *CollectT) failed() bool {
+func (c *CollectT) Failed() bool {
 	return c.errors != nil
 }
 
@@ -2164,7 +2164,7 @@ func EventuallyWithT(t TestingT, condition func(collect *CollectT), waitFor time
 			tickC = nil
 			go checkCond()
 		case collect := <-ch:
-			if !collect.failed() {
+			if !collect.Failed() {
 				return true
 			}
 			// Keep the errors from the last ended condition, so that they can be copied to t if timeout is reached.
