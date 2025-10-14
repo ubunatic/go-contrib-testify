@@ -33,9 +33,6 @@ type AssertionTesterNonConformingObject struct {
 type MockT struct {
 	// Failed marks the test as failed.
 	Failed bool
-	// finished marks the test as finished, indicating that FailNow was called
-	// and no further code should be executed after that.
-	finished bool
 }
 
 // Helper is like [testing.T.Helper] but does nothing.
@@ -43,10 +40,7 @@ func (MockT) Helper() {}
 
 func (t *MockT) FailNow() {
 	t.Failed = true
-	t.finished = true
 }
-
-func (t *MockT) Finished() bool { return t.finished }
 
 func (t *MockT) Errorf(format string, args ...interface{}) {
 	_, _ = format, args
@@ -832,7 +826,7 @@ func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 			observedConditionFailures++
 		}
 		if strings.Contains(line, "Panic in condition:") {
-			fmt.Println(name, line, "<-- expected 'Condition' panic message")
+			fmt.Println(name, line, "<-- expected panic message")
 			observedPanics++
 		}
 	}
