@@ -3,8 +3,10 @@ package require
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -805,58 +807,79 @@ func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	assert.Error(t, err, "go test for TestFailInsideEventually must fail")
 	finishedTests := 0
-	failedAssertions := 0
-	expectedFailures := 0
+	observedErrors := 0
+	observedConditionFailures := 0
+	observedPanics := 0
+	extractTestNameExp := regexp.MustCompile(`TestFailInsideEventuallyViaCommandLine[^ ]*`)
+	name := ""
 	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "=== RUN   ") {
+			name = extractTestNameExp.FindString(line)
+			fmt.Println(line)
+		}
+
 		if strings.Contains(line, "❌") {
-			t.Log(strings.TrimSpace(line), " (this is NOT expected)")
-			failedAssertions++
+			fmt.Println(name, line, "<-- unexpected error")
+			observedErrors++
 		}
 		if strings.Contains(line, "✅ FINISHED") {
-			t.Log(strings.TrimSpace(line))
+			fmt.Println(name, line, "<-- expected successful test")
 			finishedTests++
 		}
 		if strings.Contains(line, "Error:") && strings.Contains(line, "Condition") {
-			t.Log(strings.TrimSpace(line), "(expected 'Condition …' message)")
-			expectedFailures++
+			fmt.Println(name, line, "<-- expected 'Condition' message")
+			observedConditionFailures++
+		}
+		if strings.Contains(line, "Panic in condition:") {
+			fmt.Println(name, line, "<-- expected 'Condition' panic message")
+			observedPanics++
 		}
 	}
-	assert.Equal(t, 0, failedAssertions, "Unexpected errors detected, see output")
+
+	assert.Equal(t, 0, observedErrors, "Unexpected errors detected, see output")
+
 	// There are 6 tests that are expected to fail.
 	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
-	assert.Equal(t, 6, finishedTests, "Expected number of finished tests not found")
-	// There are 6 tests that are expected to fail, but one of them uses assert.Fail and return true.
-	// For this case the condition will be called once and then returns true.
-	// The "Condition ..." message is not printed in that case. Therefore we expect 5 failures here.
+	assert.Equal(t, 6, finishedTests, "Expected number of FINISHED tests not found")
+
+	// There are 5 tests where the condition is never satisfied.
+	// One test uses assert.Fail but eventually returns true and thus satisfies the condition.
 	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
-	assert.Equal(t, 5, expectedFailures, "Missed expected panics or final failures, see output")
+	assert.Equal(t, 5, observedConditionFailures, "Expected number of 'Condition' messages not found, see output")
+
+	// There are 2 tests that panic, so we expect 2 panic messages.
+	assert.Equal(t, 2, observedPanics, "Missed expected panics, see output")
 }
 
 func TestFailInsideEventually(t *testing.T) {
 	if os.Getenv("TestFailInsideEventually") == "" {
 		t.Skip("Skipping test, run via TestFailInsideEventuallyViaCommandLine")
 	}
+
 	// Using testing.T:
 	// Enable this test temporarily to manually check that the issue is fixed.
 	// Note that MockT does not reproduce the issue, so we have to use the real *testing.T.
 	// TODO: Enhance MockT to reproduce the issue, then we can remove the t.Skip above.
-	// UPDATE: Tried to enhance MockT, but it still does not reproduce the issue.
-	//         require.MockT does not play well when assert.Fail is called.
+	// UPDATE: I tried to enhance MockT, but it still does not reproduce the issue or fails
+	//         in a different way. Therefore I keep using *testing.T for now.
+	//         In general, require.MockT does not play well when assert.Fail is called.
 	//         The test will not be marked as failed, even though Fail is called.
 
 	// The Bug:
 	// Calling require.Fail (or similar) inside require.Eventually will prevent the 'condition'
 	// to exit with a result. The channel assignment in the assert.Eventually will block
-	// and hang the test until the timeout is reached. There was is not other way to wait
-	// for the unclean exit. The changes to assert.Eventually committed with this tis test
-	// fix this issue, by also waiting for an unclean exit of the condition.
+	// and hang the test until the timeout is reached. There was is no other way to wait
+	// for the unclean exit. The changes to assert.Eventually committed with this test
+	// fix this issue, by also waiting for an unclean exit of the condition and moreover
+	// by handling panics inside the condition gracefully.
 
 	// How to read the test results:
 	// - See [TestFailInsideEventuallyViaCommandLine], which automates this
-	// - The test will always fail, because it calls Fail or assert.Fail
+	// - The test will always fail, because it calls Fail or assert.Fail or panics
 	// - The test is "successful" if it fails quickly and cleanly, i.e. without
 	//   multiple calls to the eventually function, except if expected.
-	// - The test logs should only contain INFO messages (see ℹ️ emoji)
+	// - The test logs should contain specific messages, see below.
 	// - The test must not log any UNCLEAN EXIT or MISSED ASSERTIONS messages or any errors ❌.
 
 	type test struct {
@@ -876,12 +899,19 @@ func TestFailInsideEventually(t *testing.T) {
 	Panic := func(_ TestingT) { panic("💥 panicking now") }
 
 	for _, tt := range []test{
+		// Test cases that must exit immediately after the first call to the condition.
 		{"require.Fail must stop", returnStop, RequireFail, mustStop},
 		{"require.Fail must stop even if told not to", returnNoStop, RequireFail, mustStop},
-		{"assert.Fail must not stop if told not to", returnNoStop, AssertFail, mustNotStop},
 		{"assert.Fail must stop if told to", returnStop, AssertFail, mustStop},
+
+		// The following test case is the only one that must not stop and where multiple calls
+		// to the condition are expected, because assert.Fail does not stop the execution of the condition.
+		{"assert.Fail must not stop if told not to", returnNoStop, AssertFail, mustNotStop},
+
+		// Panics must always stop, because they are not expected and indicate a bug in the code.
 		{"panic must stop", returnStop, Panic, mustStop},
 		{"panic must stop even if told not to", returnNoStop, Panic, mustStop},
+
 		// Make sure to update the assertions in TestFailInsideEventuallyViaCommandLine
 		// accordingly if you change the number of tests here.
 	} {

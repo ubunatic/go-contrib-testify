@@ -2010,17 +2010,28 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 		h.Helper()
 	}
 
-	const failed = 0
-	const panic = 1
-	const stop = 2
-	const noStop = 3
+	// "never satisfied" is the original message when a timeout happens.
+	const timeout = "never satisfied"
+	// "failed" means the condition function called require.Fail or similar.
+	const failed = "failed"
+	// "panicked" means the condition function panicked.
+	const panicked = "panicked"
 
-	resultCh := make(chan int, 1)
+	// "start" and "stop" are non-error result values from the condition function
+	const stop = "stop"
+	const noStop = "noStop"
+
+	resultCh := make(chan string, 1)
 	checkCond := func() {
 		result := failed
 		defer func() {
+			// A panic goes a different route that a failed test.
+			// We can distinguish them here and add the recover() result as detailed info.
+			// This is similar to what happens with a real panic in a test but allows us
+			// to stop the test gracefully.
 			if r := recover(); r != nil {
-				result = panic
+				t.Errorf("Panic in condition: %v\n%s", r, debug.Stack())
+				result = panicked
 			}
 			resultCh <- result
 		}()
@@ -2052,13 +2063,13 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 			go checkCond() // Schedule the next check.
 		case v := <-resultCh:
 			switch v {
-			case failed, panic:
+			case failed, panicked:
 				// Condition panicked or test failed and finished.
 				// Cannot determine correct result.
 				// Cannot decide if we should continue gracefully or not.
-				// We can stop here and now, and mark test as failed with
+				// We can stop here and now, and mark test as finally failed with
 				// the same error message as the timeout case.
-				return FailNow(t, "Condition never satisfied", msgAndArgs...)
+				return FailNow(t, "Condition "+v, msgAndArgs...)
 			case stop:
 				return true // Condition satisfied.
 			case noStop:
