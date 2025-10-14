@@ -2011,13 +2011,17 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 	}
 
 	const failed = 0
-	const stop = 1
-	const noStop = 2
+	const panic = 1
+	const stop = 2
+	const noStop = 3
 
 	resultCh := make(chan int, 1)
 	checkCond := func() {
 		result := failed
 		defer func() {
+			if r := recover(); r != nil {
+				result = panic
+			}
 			resultCh <- result
 		}()
 		if condition() {
@@ -2048,17 +2052,17 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 			go checkCond() // Schedule the next check.
 		case v := <-resultCh:
 			switch v {
-			case failed:
+			case failed, panic:
 				// Condition panicked or test failed and finished.
 				// Cannot determine correct result.
 				// Cannot decide if we should continue gracefully or not.
 				// We can stop here and now, and mark test as failed with
 				// the same error message as the timeout case.
-				return Fail(t, "Condition never satisfied", msgAndArgs...)
+				return FailNow(t, "Condition never satisfied", msgAndArgs...)
 			case stop:
-				return true
+				return true // Condition satisfied.
 			case noStop:
-				fallthrough
+				fallthrough // Condition not satisfied yet, continue waiting.
 			default:
 				tickC = ticker.C // Enable ticks to check again.
 			}
@@ -2099,12 +2103,12 @@ func (*CollectT) Copy(TestingT) {
 }
 
 func (c *CollectT) fail() {
-	if !c.failed() {
+	if !c.Failed() {
 		c.errors = []error{} // Make it non-nil to mark a failure.
 	}
 }
 
-func (c *CollectT) failed() bool {
+func (c *CollectT) Failed() bool {
 	return c.errors != nil
 }
 
@@ -2164,7 +2168,7 @@ func EventuallyWithT(t TestingT, condition func(collect *CollectT), waitFor time
 			tickC = nil
 			go checkCond()
 		case collect := <-ch:
-			if !collect.failed() {
+			if !collect.Failed() {
 				return true
 			}
 			// Keep the errors from the last ended condition, so that they can be copied to t if timeout is reached.

@@ -3,7 +3,6 @@ package require
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -30,7 +29,11 @@ type AssertionTesterNonConformingObject struct {
 }
 
 type MockT struct {
+	// Failed marks the test as failed.
 	Failed bool
+	// finished marks the test as finished, indicating that FailNow was called
+	// and no further code should be executed after that.
+	finished bool
 }
 
 // Helper is like [testing.T.Helper] but does nothing.
@@ -38,7 +41,10 @@ func (MockT) Helper() {}
 
 func (t *MockT) FailNow() {
 	t.Failed = true
+	t.finished = true
 }
+
+func (t *MockT) Finished() bool { return t.finished }
 
 func (t *MockT) Errorf(format string, args ...interface{}) {
 	_, _ = format, args
@@ -797,23 +803,46 @@ func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 	t.Setenv("TestFailInsideEventually", "1")
 	cmd := exec.Command("go", "test", "-v", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
 	out, err := cmd.CombinedOutput()
-	Error(t, err)
+	assert.Error(t, err, "go test for TestFailInsideEventually must fail")
+	finishedTests := 0
+	failedAssertions := 0
+	expectedFailures := 0
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.Contains(line, "ℹ️") {
-			fmt.Println(line)
+		if strings.Contains(line, "❌") {
+			t.Log(strings.TrimSpace(line), " (this is NOT expected)")
+			failedAssertions++
 		}
-		NotContains(t, line, "❌")
+		if strings.Contains(line, "✅ FINISHED") {
+			t.Log(strings.TrimSpace(line))
+			finishedTests++
+		}
+		if strings.Contains(line, "Error:") && strings.Contains(line, "Condition") {
+			t.Log(strings.TrimSpace(line), "(expected 'Condition …' message)")
+			expectedFailures++
+		}
 	}
+	assert.Equal(t, 0, failedAssertions, "Unexpected errors detected, see output")
+	// There are 6 tests that are expected to fail.
+	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
+	assert.Equal(t, 6, finishedTests, "Expected number of finished tests not found")
+	// There are 6 tests that are expected to fail, but one of them uses assert.Fail and return true.
+	// For this case the condition will be called once and then returns true.
+	// The "Condition ..." message is not printed in that case. Therefore we expect 5 failures here.
+	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
+	assert.Equal(t, 5, expectedFailures, "Missed expected panics or final failures, see output")
 }
 
 func TestFailInsideEventually(t *testing.T) {
 	if os.Getenv("TestFailInsideEventually") == "" {
-		t.Skip("Skipping failing test that calls Fail inside Eventually, set TestFailInsideEventually to run it")
+		t.Skip("Skipping test, run via TestFailInsideEventuallyViaCommandLine")
 	}
 	// Using testing.T:
 	// Enable this test temporarily to manually check that the issue is fixed.
 	// Note that MockT does not reproduce the issue, so we have to use the real *testing.T.
 	// TODO: Enhance MockT to reproduce the issue, then we can remove the t.Skip above.
+	// UPDATE: Tried to enhance MockT, but it still does not reproduce the issue.
+	//         require.MockT does not play well when assert.Fail is called.
+	//         The test will not be marked as failed, even though Fail is called.
 
 	// The Bug:
 	// Calling require.Fail (or similar) inside require.Eventually will prevent the 'condition'
@@ -833,67 +862,66 @@ func TestFailInsideEventually(t *testing.T) {
 	type test struct {
 		Name     string
 		Return   bool
-		FailFunc func(t *testing.T)
+		FailFunc func(t TestingT)
 		MustStop bool // after the FailFunc is called
 	}
 
-	const stopAfterFail = true
-	const noStopAfterFail = false
+	const returnStop = true
+	const returnNoStop = false
 	const mustStop = true
 	const mustNotStop = false
 
-	RequireFail := func(t *testing.T) { t.Helper(); Fail(t, "fail now") }
-	AssertFail := func(t *testing.T) { t.Helper(); assert.Fail(t, "mark as failed") }
-	Panic := func(t *testing.T) { t.Helper(); panic("panicking now") }
+	RequireFail := func(t TestingT) { Fail(t, "💥 fail now") }
+	AssertFail := func(t TestingT) { assert.Fail(t, "💥 mark as failed") }
+	Panic := func(_ TestingT) { panic("💥 panicking now") }
 
 	for _, tt := range []test{
-		{"require.Fail must stop", stopAfterFail, RequireFail, mustStop},
-		{"require.Fail must stop even if told not to", noStopAfterFail, RequireFail, mustStop},
-		{"assert.Fail must stop if told to", stopAfterFail, AssertFail, mustStop},
-		{"assert.Fail must not stop if told not to", noStopAfterFail, AssertFail, mustNotStop},
-		{"panic must stop", stopAfterFail, Panic, mustStop},
+		{"require.Fail must stop", returnStop, RequireFail, mustStop},
+		{"require.Fail must stop even if told not to", returnNoStop, RequireFail, mustStop},
+		{"assert.Fail must not stop if told not to", returnNoStop, AssertFail, mustNotStop},
+		{"assert.Fail must stop if told to", returnStop, AssertFail, mustStop},
+		{"panic must stop", returnStop, Panic, mustStop},
+		{"panic must stop even if told not to", returnNoStop, Panic, mustStop},
+		// Make sure to update the assertions in TestFailInsideEventuallyViaCommandLine
+		// accordingly if you change the number of tests here.
 	} {
 		count := 0
 		start := time.Now()
 		timeout := time.Second * 1
 		tick := time.Second / 3
+		ok := false
 
-		ok := t.Run(tt.Name, func(t *testing.T) {
+		ok = t.Run(tt.Name, func(t *testing.T) {
 			// Cannot use a MockT here, because it does reproduce the issue.
 			Eventually(t, func() bool {
 				count++
-				t.Log("ℹ️ eventually call number:", count, "calling FailNow! 💥")
+				t.Log("🪲 eventually call number:", count, "calling FailNow!")
 				tt.FailFunc(t)   // any case that calls Fail or assert.Fail should stop retrying
 				return tt.Return // indicate whether to stop retrying
 			}, timeout, tick)
 		})
 
 		dur := time.Since(start)
-		t.Log("DEBUG: test duration:", dur)
+		t.Log("🪲 test duration:", dur)
 
 		// TODO: Replace with plain t with MockT once it can reproduce the issue.
 		// Until can only indicate that the test should have failed using stdout.
 
-		if ok {
-			t.Logf("❌ Test should have failed, but did not")
-		}
+		c := new(assert.CollectT)
+		assert.True(c, !ok, "❌ UNCLEAN EXIT: test was expected to fail, but passed")
 
 		if tt.MustStop {
-			if count != 1 {
-				t.Logf("❌ UNCLEAN EXIT: eventually func should be called exactly once, but was called %d times", count)
-			}
-			if dur >= tick {
-				t.Logf("❌ UNCLEAN EXIT: eventually func should be called only once, but total duration was %s", dur)
-			}
+			assert.Equal(c, 1, count, "❌ UNCLEAN EXIT: eventually func should be called exactly once")
+			assert.Less(c, dur, tick, "❌ UNCLEAN EXIT: eventually func should be called only once, but took too long")
 		} else {
-			if count <= 1 {
-				t.Logf("❌ MISSED ASSERTIONS: eventually func should be called multiple times, but was called %d times", count)
-			}
-			if dur < tick {
-				t.Logf("❌ MISSED ASSERTIONS: eventually func should be called multiple times over time, but total duration was only %s", dur)
-			}
+			assert.Greater(c, count, 1, "❌ MISSED ASSERTIONS: eventually func should be called multiple times, but was called only once")
+			assert.Greater(c, dur, tick, "❌ MISSED ASSERTIONS: eventually func should be called multiple times over time, but total duration was too short")
+		}
+
+		if c.Failed() {
+			t.Log("❌ TEST FAILED")
+		} else {
+			t.Log("✅ FINISHED", tt.Name)
 		}
 	}
-
-	t.SkipNow()
 }
