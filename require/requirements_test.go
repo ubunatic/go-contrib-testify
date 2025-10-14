@@ -3,6 +3,10 @@ package require
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -787,4 +791,107 @@ func TestEventuallyWithTTrue(t *testing.T) {
 	EventuallyWithT(mockT, condition, 100*time.Millisecond, 20*time.Millisecond)
 	False(t, mockT.Failed, "Check should pass")
 	Equal(t, 2, counter, "Condition is expected to be called 2 times")
+}
+
+func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
+	t.Setenv("TestFailInsideEventually", "1")
+	cmd := exec.Command("go", "test", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
+	out, err := cmd.CombinedOutput()
+	Error(t, err)
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "ℹ️") {
+			fmt.Println(line)
+		}
+		NotContains(t, line, "❌")
+	}
+}
+
+func TestFailInsideEventually(t *testing.T) {
+	if os.Getenv("TestFailInsideEventually") == "" {
+		t.Skip("Skipping failing test that calls Fail inside Eventually, set TestFailInsideEventually to run it")
+	}
+	// Using testing.T:
+	// Enable this test temporarily to manually check that the issue is fixed.
+	// Note that MockT does not reproduce the issue, so we have to use the real *testing.T.
+	// TODO: Enhance MockT to reproduce the issue, then we can remove the t.Skip above.
+
+	// The Bug:
+	// Calling require.Fail (or similar) inside require.Eventually will prevent the 'condition'
+	// to exit with a result. The channel assignment in the assert.Eventually will block
+	// and hang the test until the timeout is reached. There was is not other way to wait
+	// for the unclean exit. The changes to assert.Eventually committed with this tis test
+	// fix this issue, by also waiting for an unclean exit of the condition.
+
+	// How to read the test results:
+	// - See [TestFailInsideEventuallyViaCommandLine], which automates this
+	// - The test will always fail, because it calls Fail or assert.Fail
+	// - The test is "successful" if it fails quickly and cleanly, i.e. without
+	//   multiple calls to the eventually function, except if expected.
+	// - The test logs should only contain INFO messages (see ℹ️ emoji)
+	// - The test must not log any UNCLEAN EXIT or MISSED ASSERTIONS messages or any errors ❌.
+
+	type test struct {
+		Name     string
+		Return   bool
+		FailFunc func(t *testing.T)
+		MustStop bool // after the FailFunc is called
+	}
+
+	const stopAfterFail = true
+	const noStopAfterFail = false
+	const mustStop = true
+	const mustNotStop = false
+
+	RequireFail := func(t *testing.T) { t.Helper(); Fail(t, "fail now") }
+	AssertFail := func(t *testing.T) { t.Helper(); assert.Fail(t, "mark as failed") }
+
+	for _, tt := range []test{
+		{"require.Fail must stop", stopAfterFail, RequireFail, mustStop},
+		{"require.Fail must stop even if told not to", noStopAfterFail, RequireFail, mustStop},
+		{"assert.Fail must stop if told to", stopAfterFail, AssertFail, mustStop},
+		{"assert.Fail must not stop if told not to", noStopAfterFail, AssertFail, mustNotStop},
+	} {
+		count := 0
+		start := time.Now()
+		timeout := time.Second * 1
+		tick := time.Second / 3
+
+		ok := t.Run(tt.Name, func(t *testing.T) {
+			// Cannot use a MockT here, because it does reproduce the issue.
+			Eventually(t, func() bool {
+				count++
+				t.Log("ℹ️ eventually call number:", count, "calling FailNow! 💥")
+				tt.FailFunc(t)   // any case that calls Fail or assert.Fail should stop retrying
+				return tt.Return // indicate whether to stop retrying
+			}, timeout, tick)
+		})
+
+		dur := time.Since(start)
+		t.Log("DEBUG: test duration:", dur)
+
+		// TODO: Replace with plain t with MockT once it can reproduce the issue.
+		// Until can only indicate that the test should have failed using stdout.
+
+		if ok {
+			t.Logf("❌ Test should have failed, but did not")
+		}
+
+		if tt.MustStop {
+			if count != 1 {
+				t.Logf("❌ UNCLEAN EXIT: eventually func should be called exactly once, but was called %d times", count)
+			}
+			if dur >= tick {
+				t.Logf("❌ UNCLEAN EXIT: eventually func should be called only once, but total duration was %s", dur)
+			}
+		} else {
+			if count <= 1 {
+				t.Logf("❌ MISSED ASSERTIONS: eventually func should be called multiple times, but was called %d times", count)
+			}
+			if dur < tick {
+				t.Logf("❌ MISSED ASSERTIONS: eventually func should be called multiple times over time, but total duration was only %s", dur)
+			}
+		}
+	}
+
+	t.SkipNow()
 }
