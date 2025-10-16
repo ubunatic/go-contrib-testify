@@ -5,9 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"regexp"
-	"strings"
+	"runtime"
 	"testing"
 	"time"
 
@@ -797,45 +795,18 @@ func TestEventuallyWithTTrue(t *testing.T) {
 
 func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 	t.Setenv("TestFailInsideEventually", "1")
-	cmd := exec.Command("go", "test", "-v", "-race", "-count=1", "-run", "^TestFailInsideEventually$")
-	out, err := cmd.CombinedOutput()
-	assert.Error(t, err, "go test for TestFailInsideEventually must fail")
-	finishedTests := 0
-	observedErrors := 0
-	observedConditionFailures := 0
-	extractTestNameExp := regexp.MustCompile(`TestFailInsideEventuallyViaCommandLine[^ ]*`)
-	name := ""
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "=== RUN   ") {
-			name = extractTestNameExp.FindString(line)
-			fmt.Println(line)
-		}
-
-		if strings.Contains(line, "❌") {
-			fmt.Println(name, line, "<-- unexpected error")
-			observedErrors++
-		}
-		if strings.Contains(line, "✅ FINISHED") {
-			fmt.Println(name, line, "<-- expected successful test")
-			finishedTests++
-		}
-		if strings.Contains(line, "Error:") && strings.Contains(line, "Condition") {
-			fmt.Println(name, line, "<-- expected 'Condition' message")
-			observedConditionFailures++
-		}
-	}
-
-	assert.Equal(t, 0, observedErrors, "Unexpected errors detected, see output")
-
-	// There are 4 tests that are expected to fail.
-	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
-	assert.Equal(t, 4, finishedTests, "Expected number of FINISHED tests not found")
-
-	// There are 3 tests where the condition is never satisfied.
-	// One test uses assert.Fail but eventually returns true and thus satisfies the condition.
-	// If you change the number of tests in TestFailInsideEventually, please update this number accordingly.
-	assert.Equal(t, 3, observedConditionFailures, "Expected number of 'Condition' messages not found, see output")
+	assert.CommandLineTest(t, assert.CommandLineTestSpec{
+		Name:                "TestFailInsideEventually",
+		ExpectFailure:       true,
+		ExpectedErrorLogs:   0, // no unexpected errors must be logged
+		ExpectedSuccessLogs: 6, // 6 tests must "pass" by logging the expected messages
+		ExpectedLineMatches: map[string]int{
+			"Condition never satisfied": 5 * 1, // 5x early exit, 1x assert + return true
+			"💥 mark as failed":          1 + 3, // 2x assert func (one called 3x)
+			"💥 fail now":                2 * 1, // 2x require func
+			"💥 goexit":                  2 * 1, // 2x goexit func
+		},
+	})
 }
 
 func TestFailInsideEventually(t *testing.T) {
@@ -881,6 +852,7 @@ func TestFailInsideEventually(t *testing.T) {
 
 	RequireFail := func(t TestingT) { Fail(t, "💥 fail now") }
 	AssertFail := func(t TestingT) { assert.Fail(t, "💥 mark as failed") }
+	Goexit := func(t TestingT) { fmt.Println("💥 goexit"); runtime.Goexit() }
 
 	for _, tt := range []test{
 		// Test cases that must exit immediately after the first call to the condition.
@@ -891,6 +863,10 @@ func TestFailInsideEventually(t *testing.T) {
 		// The following test case is the only one that must not stop and where multiple calls
 		// to the condition are expected, because assert.Fail does not stop the execution of the condition.
 		{"assert.Fail must not stop if told not to", returnNoStop, AssertFail, mustNotStop},
+
+		// Test cases that call runtime.Goexit, which must stop immediately.
+		{"runtime.Goexit must stop", returnStop, Goexit, mustStop},
+		{"runtime.Goexit must stop even if told not to", returnNoStop, Goexit, mustStop},
 
 		// Make sure to update the assertions in TestFailInsideEventuallyViaCommandLine
 		// accordingly if you change the number of tests here.
