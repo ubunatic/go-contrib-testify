@@ -799,9 +799,11 @@ func TestFailInsideEventuallyViaCommandLine(t *testing.T) {
 		Name:                "TestFailInsideEventually",
 		ExpectFailure:       true,
 		ExpectedErrorLogs:   0, // no unexpected errors must be logged
-		ExpectedSuccessLogs: 6, // 6 tests must "pass" by logging the expected messages
+		ExpectedSuccessLogs: 8, // 6 tests must "pass" by logging the expected messages
 		ExpectedLineMatches: map[string]int{
-			"Condition never satisfied": 5 * 1, // 5x early exit, 1x assert + return true
+			"Condition never satisfied": 1,     // 1x eventually timeout
+			"Condition failed":          4,     // 2x require.Fail  + 2x goexit
+			"Condition panicked":        2,     // 2x panic test
 			"💥 mark as failed":          1 + 3, // 2x assert func (one called 3x)
 			"💥 fail now":                2 * 1, // 2x require func
 			"💥 goexit":                  2 * 1, // 2x goexit func
