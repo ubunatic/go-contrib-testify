@@ -3,11 +3,10 @@
 package require
 
 import (
+	assert "github.com/stretchr/testify/assert"
 	http "net/http"
 	url "net/url"
 	time "time"
-
-	assert "github.com/stretchr/testify/assert"
 )
 
 // Condition uses a Comparison to assert a complex condition.
@@ -865,7 +864,7 @@ func Implements(t TestingT, interfaceObject interface{}, object interface{}, msg
 	t.FailNow()
 }
 
-// Implements asserts that an object is implemented by the specified interface.
+// Implementsf asserts that an object is implemented by the specified interface.
 //
 //	require.Implementsf(t, (*MyInterface)(nil), new(MyObject), "error message %s", "formatted")
 func Implementsf(t TestingT, interfaceObject interface{}, object interface{}, msg string, args ...interface{}) {
