@@ -2010,14 +2010,29 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 		h.Helper()
 	}
 
-	const failed = 0
-	const stop = 1
-	const noStop = 2
+	// ResultTimeout is the original message when a timeout happens.
+	const ResultTimeout = "Condition never satisfied"
+	// ResultFailed means the condition function called require.Fail or similar.
+	const ResultFailed = "Condition failed"
+	// ResultPanic means the condition function panicked.
+	const ResultPanic = "Condition panicked"
 
-	resultCh := make(chan int, 1)
+	// "start" and "stop" are non-error result values from the condition function
+	const stop = "Condition satisfied"
+	const noStop = "Condition not satisfied"
+
+	resultCh := make(chan string, 1)
 	checkCond := func() {
-		result := failed
+		result := ResultFailed
 		defer func() {
+			// A panic goes a different route that a failed test.
+			// We can distinguish them here and add the recover() result as detailed info.
+			// This is similar to what happens with a real panic in a test but allows us
+			// to stop the test gracefully.
+			if r := recover(); r != nil {
+				t.Errorf("Panic in condition: %v\n%s", r, debug.Stack())
+				result = ResultPanic
+			}
 			resultCh <- result
 		}()
 		if condition() {
@@ -2042,23 +2057,23 @@ func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick t
 	for {
 		select {
 		case <-timer.C:
-			return Fail(t, "Condition never satisfied", msgAndArgs...)
+			return Fail(t, ResultTimeout, msgAndArgs...)
 		case <-tickC:
 			tickC = nil    // Do not check again until we get a result.
 			go checkCond() // Schedule the next check.
 		case v := <-resultCh:
 			switch v {
-			case failed:
+			case ResultFailed, ResultPanic:
 				// Condition panicked or test failed and finished.
 				// Cannot determine correct result.
 				// Cannot decide if we should continue gracefully or not.
-				// We can stop here and now, and mark test as failed with
+				// We can stop here and now, and mark test as finally failed with
 				// the same error message as the timeout case.
-				return Fail(t, "Condition never satisfied", msgAndArgs...)
+				return FailNow(t, v, msgAndArgs...)
 			case stop:
-				return true
+				return true // Condition satisfied.
 			case noStop:
-				fallthrough
+				fallthrough // Condition not satisfied yet, continue waiting.
 			default:
 				tickC = ticker.C // Enable ticks to check again.
 			}

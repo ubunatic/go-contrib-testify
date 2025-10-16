@@ -853,6 +853,7 @@ func TestFailInsideEventually(t *testing.T) {
 	RequireFail := func(t TestingT) { Fail(t, "💥 fail now") }
 	AssertFail := func(t TestingT) { assert.Fail(t, "💥 mark as failed") }
 	Goexit := func(t TestingT) { fmt.Println("💥 goexit"); runtime.Goexit() }
+	Panic := func(_ TestingT) { panic("💥 panicking now") }
 
 	for _, tt := range []test{
 		// Test cases that must exit immediately after the first call to the condition.
@@ -867,6 +868,9 @@ func TestFailInsideEventually(t *testing.T) {
 		// Test cases that call runtime.Goexit, which must stop immediately.
 		{"runtime.Goexit must stop", returnStop, Goexit, mustStop},
 		{"runtime.Goexit must stop even if told not to", returnNoStop, Goexit, mustStop},
+		// Panics must always stop, because they are not expected and indicate a bug in the code.
+		{"panic must stop", returnStop, Panic, mustStop},
+		{"panic must stop even if told not to", returnNoStop, Panic, mustStop},
 
 		// Make sure to update the assertions in TestFailInsideEventuallyViaCommandLine
 		// accordingly if you change the number of tests here.
