@@ -92,9 +92,11 @@ func (s CommandLineTestSpec) assertLineMatches(t *testing.T, lines []string) boo
 //
 // Also see "TestFailInsideEventuallyViaCommandLine" example in require/requirements_test.go
 func CommandLineTest(t *testing.T, spec CommandLineTestSpec) bool {
+	t.Helper()
 	spec = spec.withDefaults(t)
 
 	t.Run(spec.Name, func(t *testing.T) {
+		t.Helper()
 		t.Setenv(spec.Name, "1") // signal to the test to run
 		args := append([]string{"test"}, spec.Args...)
 		args = append(args, spec.PackagePath)
