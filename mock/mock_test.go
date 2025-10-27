@@ -1342,11 +1342,7 @@ func Test_Mock_Called(t *testing.T) {
 }
 
 func asyncCall(m *Mock, ch chan Arguments) {
-	var args Arguments
-	defer func() {
-		ch <- args
-	}()
-	args = m.Called(1, 2, 3)
+	ch <- m.Called(1, 2, 3)
 }
 
 func Test_Mock_Called_blocks(t *testing.T) {
