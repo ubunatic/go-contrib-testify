@@ -23,9 +23,6 @@ _testmain.go
 
 .DS_Store
 
-# AI helpers
-*-discussion.md
-
 # Output of "go test -c"
 /assert/assert.test
 /require/require.test
