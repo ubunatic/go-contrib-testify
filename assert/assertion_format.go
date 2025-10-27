@@ -169,18 +169,17 @@ func ErrorIsf(t TestingT, err error, target error, msg string, args ...interface
 // periodically checking result and completion of the target function each tick.
 // If the condition is not met, the test fails with "Condition never satisfied".
 //
-// ⚠️ A condition function may exit unexpectedly, which is a common pitfall,
-// since [Eventually] runs the condition function in a separate goroutine.
-// An unexpected exit happens in the following cases:
+// A condition function may exit unexpectedly, which is a common pitfall,
+// since the condition function runs in a separate goroutine. An unexpected exit
+// happens in the following cases:
 //
 //  1. The condition function panics. In this case the entire test will panic
 //     immediately and exit. This is normal Go runtime behavior and not
-//     specific to the testing framework. Condition panics are currently not
-//     recovered by [Eventually].
+//     specific to the testing framework.
 //
 //  2. The condition function calls [runtime.Goexit], which exits the goroutine
 //     without panicking. In this case the test fails immediately with
-//     "Condition exited unexpectedly". This is new behavior since v1.X.X.
+//     "Condition exited unexpectedly".
 //
 // Note that [runtime.Goexit] is called by t.FailNow() and thus by all failing
 // 'require' functions. You can call [require.Fail] and similar requirements
@@ -188,7 +187,7 @@ func ErrorIsf(t TestingT, err error, target error, msg string, args ...interface
 // failing the test immediately but only after waitFor duration elapsed.
 // This was a bug that has been fixed. Please adapt your tests accordingly.
 //
-// Also see [EventuallyWithT] for a version that allows using assertions in the
+// Also see [EventuallyfWithT] for a version that allows using assertions in the
 // condition function instead of returning a simple boolean value.
 //
 // Eventuallyf is often used to check conditions against values that are set by
@@ -199,24 +198,23 @@ func ErrorIsf(t TestingT, err error, target error, msg string, args ...interface
 // call to a 'require' function inside the condition function to fail the test
 // immediately on error:
 //
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{}  // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(time.Second)
 //		externalValue.Store(true)
 //	}()
 //
-//	assert.Eventuallyf(t, func() bool {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//	condition: = func() bool {
 //		gotValue := externalValue.Load()
 //
 //		// It is safe to use require functions on the parent 't' to fail the entire test immediately.
 //		_, err := someFunction()
-//		require.NoError(t, err, "external function must not fail") // 🛑 exit early on error
+//		require.NoError(t, err, "external function must not fail")
 //
 //		return gotValue
+//	}
 //
-//	}, 2*time.Second, 10*time.Millisecond,  "externalValue must become true within 2s, more: %s", "formatted")
+//	assert.Eventuallyf(t, condition, 2*time.Second, 10*time.Millisecond, "error message %s", "formatted")
 func Eventuallyf(t TestingT, condition func() bool, waitFor time.Duration, tick time.Duration, msg string, args ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()
@@ -253,7 +251,7 @@ func Eventuallyf(t TestingT, condition func() bool, waitFor time.Duration, tick 
 // calling FailNow on the supplied 'collect', the test fails immediately with
 // "Condition exited unexpectedly" and EventuallyWithTf returns false.
 //
-// 💡 Tick Assertions vs. Parent Test Assertions
+// Tick Assertions vs. Parent Test Assertions:
 //   - Use tick assertions and requirements on the supplied 'collect' and not
 //     on the parent 't'.
 //   - The last tick errors are always copied to 't' in case of failure.
@@ -261,22 +259,16 @@ func Eventuallyf(t TestingT, condition func() bool, waitFor time.Duration, tick 
 //   - Do not use assertions on the parent 't', since this would affect all ticks
 //     and create test noise.
 //
-// ⚠️ See [Eventually] for more details about unexpected exits, which are a
+// See [Eventually] for more details about unexpected exits, which are a
 // common pitfall when using 'require' functions inside condition functions.
 //
-// Since version 1.X.X, You can call [require.Fail] and similar requirements
-// inside the condition to fail the test immediately. In the past this was not
-// failing the test immediately but only after waitFor duration elapsed.
-// This was a bug that has been fixed. Please adapt your tests accordingly.
-//
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{} // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(time.Second)
 //		externalValue.Store(true)
 //	}()
-//	assert.EventuallyWithTf(t, func(collect *assert.CollectT) {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//
+//	condition := func(collect *assert.CollectT) {
 //		gotValue := externalValue.Load()
 //
 //		// Use assertions with 'collect' and not with 't', so they are scoped to the current tick.
@@ -284,9 +276,10 @@ func Eventuallyf(t TestingT, condition func() bool, waitFor time.Duration, tick 
 //
 //		// It is safe to use require functions on the parent 't' to fail the entire test immediately.
 //		_, err := someFunction()
-//		require.NoError(t, err, "external function must not fail") // 🛑 exit early on error
+//		require.NoError(t, err, "external function must not fail")
+//	}
 //
-//	}, 2*time.Second, 10*time.Millisecond,  "externalValue must become true within 2s, more: %s", "formatted")
+//	assert.EventuallyWithTf(t, condition 2*time.Second, 10*time.Millisecond, "error message %s", "formatted")
 func EventuallyWithTf(t TestingT, condition func(collect *CollectT), waitFor time.Duration, tick time.Duration, msg string, args ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()
@@ -367,8 +360,7 @@ func GreaterOrEqualf(t TestingT, e1 interface{}, e2 interface{}, msg string, arg
 // HTTPBodyContainsf asserts that a specified handler returns a
 // body that contains a string.
 //
-//	expectVal := "I'm Feeling Lucky"
-//	assert.HTTPBodyContainsf(t, myHandler, "GET", "www.google.com", nil, expectVal, "error message %s", "formatted")
+//	assert.HTTPBodyContainsf(t, myHandler, "GET", "www.google.com", nil, "I'm Feeling Lucky", "error message %s", "formatted")
 //
 // Returns whether the assertion was successful (true) or not (false).
 func HTTPBodyContainsf(t TestingT, handler http.HandlerFunc, method string, url string, values url.Values, str interface{}, msg string, args ...interface{}) bool {
@@ -381,8 +373,7 @@ func HTTPBodyContainsf(t TestingT, handler http.HandlerFunc, method string, url 
 // HTTPBodyNotContainsf asserts that a specified handler returns a
 // body that does not contain a string.
 //
-//	expectVal := "I'm Feeling Lucky"
-//	assert.HTTPBodyNotContainsf(t, myHandler, "GET", "www.google.com", nil, expectVal, "error message %s", "formatted")
+//	assert.HTTPBodyNotContainsf(t, myHandler, "GET", "www.google.com", nil, "I'm Feeling Lucky", "error message %s", "formatted")
 //
 // Returns whether the assertion was successful (true) or not (false).
 func HTTPBodyNotContainsf(t TestingT, handler http.HandlerFunc, method string, url string, values url.Values, str interface{}, msg string, args ...interface{}) bool {
@@ -620,26 +611,18 @@ func Negativef(t TestingT, e interface{}, msg string, args ...interface{}) bool 
 // Neverf asserts that the given condition doesn't satisfy in waitFor time,
 // periodically checking the target function each tick.
 //
-// Since version 1.X.X, if the condition exits unexpectedly, this is treated as
-// a failure and the test fails immediately with: "Condition exited unexpectedly".
-// Before version 1.X.X, unexpected exits lead to a blocked channel and a falsely
-// passing [Never]. See [Eventually] for more details about unexpected exits.
+// Also see [Eventually] for details about unexpected exits of the condition function.
 //
-// You can call [require.Fail] and similar requirements inside the condition
-// to fail the test immediately. The blocking behavior from before version 1.X.X
-// prevented this. Now it works as expected. Please adapt your tests accordingly.
-//
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{} // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(2*time.Second)
 //		externalValue.Store(true)
 //	}()
 //
-//	assert.Neverf(t, func() bool {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//	condition := func() bool {
 //		return externalValue.Load()
-//	}, time.Second, 10*time.Millisecond,  "condition must never become true within 1s, more: %s", "formatted")
+//	}
+//	assert.Neverf(t, condition, time.Second, 10*time.Millisecond, "error message %s", "formatted")
 func Neverf(t TestingT, condition func() bool, waitFor time.Duration, tick time.Duration, msg string, args ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()
@@ -852,7 +835,7 @@ func NotZerof(t TestingT, i interface{}, msg string, args ...interface{}) bool {
 
 // Panicsf asserts that the code inside the specified PanicTestFunc panics.
 //
-//	assert.Panicsf(t, func(){ GoCrazy() }, "error message: %s", "formatted")
+//	assert.Panicsf(t, func(){ GoCrazy() }, "GoCrazy must panic", "error message %s", "formatted")
 func Panicsf(t TestingT, f PanicTestFunc, msg string, args ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()

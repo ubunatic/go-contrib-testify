@@ -2007,18 +2007,17 @@ type tHelper = interface {
 // periodically checking result and completion of the target function each tick.
 // If the condition is not met, the test fails with "Condition never satisfied".
 //
-// ⚠️ A condition function may exit unexpectedly, which is a common pitfall,
-// since [Eventually] runs the condition function in a separate goroutine.
-// An unexpected exit happens in the following cases:
+// A condition function may exit unexpectedly, which is a common pitfall,
+// since the condition function runs in a separate goroutine. An unexpected exit
+// happens in the following cases:
 //
 //  1. The condition function panics. In this case the entire test will panic
 //     immediately and exit. This is normal Go runtime behavior and not
-//     specific to the testing framework. Condition panics are currently not
-//     recovered by [Eventually].
+//     specific to the testing framework.
 //
 //  2. The condition function calls [runtime.Goexit], which exits the goroutine
 //     without panicking. In this case the test fails immediately with
-//     "Condition exited unexpectedly". This is new behavior since v1.X.X.
+//     "Condition exited unexpectedly".
 //
 // Note that [runtime.Goexit] is called by t.FailNow() and thus by all failing
 // 'require' functions. You can call [require.Fail] and similar requirements
@@ -2037,24 +2036,23 @@ type tHelper = interface {
 // call to a 'require' function inside the condition function to fail the test
 // immediately on error:
 //
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{}  // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(time.Second)
 //		externalValue.Store(true)
 //	}()
 //
-//	assert.Eventually(t, func() bool {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//	condition: = func() bool {
 //		gotValue := externalValue.Load()
 //
 //		// It is safe to use require functions on the parent 't' to fail the entire test immediately.
 //		_, err := someFunction()
-//		require.NoError(t, err, "external function must not fail") // 🛑 exit early on error
+//		require.NoError(t, err, "external function must not fail")
 //
 //		return gotValue
+//	}
 //
-//	}, 2*time.Second, 10*time.Millisecond, "externalValue must become true within 2s")
+//	assert.Eventually(t, condition, 2*time.Second, 10*time.Millisecond)
 func Eventually(t TestingT, condition func() bool, waitFor time.Duration, tick time.Duration, msgAndArgs ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()
@@ -2225,7 +2223,7 @@ func (c *CollectT) calledFailNow() bool {
 // calling FailNow on the supplied 'collect', the test fails immediately with
 // "Condition exited unexpectedly" and EventuallyWithT returns false.
 //
-// 💡 Tick Assertions vs. Parent Test Assertions
+// Tick Assertions vs. Parent Test Assertions:
 //   - Use tick assertions and requirements on the supplied 'collect' and not
 //     on the parent 't'.
 //   - The last tick errors are always copied to 't' in case of failure.
@@ -2233,22 +2231,16 @@ func (c *CollectT) calledFailNow() bool {
 //   - Do not use assertions on the parent 't', since this would affect all ticks
 //     and create test noise.
 //
-// ⚠️ See [Eventually] for more details about unexpected exits, which are a
+// See [Eventually] for more details about unexpected exits, which are a
 // common pitfall when using 'require' functions inside condition functions.
 //
-// Since version 1.X.X, You can call [require.Fail] and similar requirements
-// inside the condition to fail the test immediately. In the past this was not
-// failing the test immediately but only after waitFor duration elapsed.
-// This was a bug that has been fixed. Please adapt your tests accordingly.
-//
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{} // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(time.Second)
 //		externalValue.Store(true)
 //	}()
-//	assert.EventuallyWithT(t, func(collect *assert.CollectT) {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//
+//	condition := func(collect *assert.CollectT) {
 //		gotValue := externalValue.Load()
 //
 //		// Use assertions with 'collect' and not with 't', so they are scoped to the current tick.
@@ -2256,9 +2248,10 @@ func (c *CollectT) calledFailNow() bool {
 //
 //		// It is safe to use require functions on the parent 't' to fail the entire test immediately.
 //		_, err := someFunction()
-//		require.NoError(t, err, "external function must not fail") // 🛑 exit early on error
+//		require.NoError(t, err, "external function must not fail")
+//	}
 //
-//	}, 2*time.Second, 10*time.Millisecond, "externalValue must become true within 2s")
+//	assert.EventuallyWithT(t, condition 2*time.Second, 10*time.Millisecond)
 func EventuallyWithT(t TestingT, condition func(collect *CollectT), waitFor time.Duration, tick time.Duration, msgAndArgs ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()
@@ -2333,26 +2326,18 @@ func EventuallyWithT(t TestingT, condition func(collect *CollectT), waitFor time
 // Never asserts that the given condition doesn't satisfy in waitFor time,
 // periodically checking the target function each tick.
 //
-// Since version 1.X.X, if the condition exits unexpectedly, this is treated as
-// a failure and the test fails immediately with: "Condition exited unexpectedly".
-// Before version 1.X.X, unexpected exits lead to a blocked channel and a falsely
-// passing [Never]. See [Eventually] for more details about unexpected exits.
+// Also see [Eventually] for details about unexpected exits of the condition function.
 //
-// You can call [require.Fail] and similar requirements inside the condition
-// to fail the test immediately. The blocking behavior from before version 1.X.X
-// prevented this. Now it works as expected. Please adapt your tests accordingly.
-//
-//	// 🤝 Always use thread-safe variables for concurrent access!
-//	externalValue := atomic.Bool{}
+//	externalValue := atomic.Bool{} // use thread-safe variable for concurrent access
 //	go func() {
 //		time.Sleep(2*time.Second)
 //		externalValue.Store(true)
 //	}()
 //
-//	assert.Never(t, func() bool {
-//		// 🤝 Use thread-safe access when communicating with other goroutines!
+//	condition := func() bool {
 //		return externalValue.Load()
-//	}, time.Second, 10*time.Millisecond, "condition must never become true within 1s")
+//	}
+//	assert.Never(t, condition, time.Second, 10*time.Millisecond)
 func Never(t TestingT, condition func() bool, waitFor time.Duration, tick time.Duration, msgAndArgs ...interface{}) bool {
 	if h, ok := t.(tHelper); ok {
 		h.Helper()

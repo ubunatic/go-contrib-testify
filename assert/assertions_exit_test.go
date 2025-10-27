@@ -10,6 +10,7 @@ import (
 )
 
 func TestEventuallyFailsFast(t *testing.T) {
+	t.Parallel()
 
 	type testCase struct {
 		name      string
@@ -246,17 +247,18 @@ func TestPanicInNeverNotRecovered(t *testing.T) {
 // The test is successful if it panics and fails the test process and does NOT print
 // "UNREACHABLE CODE!" after the initial log messages.
 func testPanicUnrecoverable(t *testing.T, failingDemoTest func()) {
+	t.Parallel()
 	if os.Getenv("TestPanic") == "" {
 		t.Skip("Skipping test, set TestPanic=1 to run")
 	}
 	// Use fmt.Println instead of t.Log because t.Log output may be suppressed.
-	fmt.Println("⚠️ This test must fail by a panic in a goroutine.")
-	fmt.Println("⚠️ If you see the text 'UNREACHABLE CODE!' after this point, this means the test exited in an unintended way")
+	fmt.Printf("This test %s must fail by a panic in a goroutine.\n", t.Name())
+	fmt.Println("If you see the text 'UNREACHABLE CODE!' after this point, this means the test exited in an unintended way")
 	defer func() {
 		// defer statements are not run when a goroutine panics, so this code is
 		// only reachable if the panic was somehow recovered.
-		fmt.Println("❌ UNREACHABLE CODE!")
-		fmt.Println("❌ If you see this, the test has not failed as expected.")
+		fmt.Println("UNREACHABLE: Found unreachable code!")
+		fmt.Println("UNREACHABLE: If you see this, the test has not failed as expected.")
 	}()
 	failingDemoTest()
 }
